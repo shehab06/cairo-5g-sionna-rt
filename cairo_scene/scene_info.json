@@ -1,0 +1,32 @@
+{
+  "crs": "EPSG:32636",
+  "source_gpkg": "testarea1.gpkg",
+  "center_utm_x": 336351.503813937,
+  "center_utm_y": 3328838.315313852,
+  "center_gps_lat": 30.07975326398417,
+  "center_gps_lon": 31.30200595902345,
+  "utm_zone": 36,
+  "original_bounds_utm": [
+    331622.8425119334,
+    3323884.9722949746,
+    341080.1651159406,
+    3333791.6583327292
+  ],
+  "local_bounds_m": [
+    -4728.661302003602,
+    -4953.34301887732,
+    4728.661302003602,
+    4953.34301887732
+  ],
+  "num_buildings": 201865,
+  "height_column": "Height",
+  "height_stats": {
+    "min": 3.47679645,
+    "max": 74.53051,
+    "mean": 14.797577129109305
+  },
+  "python_gps_transform": {
+    "latlon_to_local": "latlon_to_local(lat, lon, center_x, center_y, epsg=32636)",
+    "local_to_latlon": "local_to_latlon(x, y, center_x, center_y, epsg=32636)"
+  }
+}
