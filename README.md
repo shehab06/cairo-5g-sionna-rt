@@ -9,6 +9,8 @@ A clean, modular Python pipeline to convert 2D building footprints with heights 
 ```
 .
 ├── testarea1.gpkg             # Input QGIS GeoPackage (Heliopolis / Nasr City buildings)
+├── render_3d_rays.py          # Simulates & renders physical 3D RF ray beams & bounces
+├── what_if_tower.py           # Tower configuration What-If optimization engine
 ├── build_scene.py             # Converts GeoPackage -> 3D Mitsuba 3 / Sionna RT scene
 ├── run_sionna_test.py         # Runs 5G ray tracing & produces 2D/3D visualizations
 ├── scene_utils.py             # Helper module for GPS (lat, lon) <-> Local (x, y) coordinates
@@ -20,7 +22,12 @@ A clean, modular Python pipeline to convert 2D building footprints with heights 
 │       └── ground.ply         # Flat ground plane mesh (top surface at Z = 0.0m)
 ├── outputs/                   # Generated High-Resolution Visualizations
 │   ├── coverage_2d.png        # 2D RSRP coverage heatmap overlaid with building footprints
-│   └── scene_3d.png           # 3D Mitsuba ray-traced snapshot with radio map overlay
+│   ├── scene_3d.png           # 3D Mitsuba ray-traced perspective snapshot
+│   ├── scene_3d_rays.png      # 3D physical ray-beam trajectory snapshot (LoS, reflections, diffraction)
+│   ├── cairo_3d_rays_viewer.html # Interactive 3D WebGL viewer with glowing laser ray paths & filters
+│   ├── what_if_tower_comparison.png # 3-panel What-If comparison figure (Baseline vs Optimized vs Delta)
+│   ├── what_if_3d_viewer.html # Interactive 3D What-If comparison viewer
+│   └── cairo_3d_viewer.html   # Standalone interactive 3D WebGL viewer
 └── README.md
 ```
 
