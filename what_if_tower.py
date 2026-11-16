@@ -263,38 +263,41 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
     output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. Save normalized textures
+    # 1. Save normalized textures and convert to Base64 to bypass CORS when opened via file://
+    import base64
+    import io
+
     vmin, vmax = -125.0, -50.0
     cmap_turbo = plt.get_cmap("turbo")
-    
     tex_a = cmap_turbo(np.clip((rsrp_a - vmin) / (vmax - vmin), 0.0, 1.0))
     tex_b = cmap_turbo(np.clip((rsrp_b - vmin) / (vmax - vmin), 0.0, 1.0))
-    
-    # Delta texture (RdYlGn centered at 0)
     cmap_delta = plt.get_cmap("RdYlGn")
     norm_delta = np.clip((delta - (-15.0)) / (30.0), 0.0, 1.0)
     tex_delta = cmap_delta(norm_delta)
 
-    path_tex_a = os.path.join(output_dir, "whatif_tex_a.png")
-    path_tex_b = os.path.join(output_dir, "whatif_tex_b.png")
-    path_tex_d = os.path.join(output_dir, "whatif_tex_delta.png")
+    def to_b64(img_array):
+        buf = io.BytesIO()
+        plt.imsave(buf, img_array, format="png", origin="lower")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
-    plt.imsave(path_tex_a, tex_a, origin="lower")
-    plt.imsave(path_tex_b, tex_b, origin="lower")
-    plt.imsave(path_tex_d, tex_delta, origin="lower")
+    b64_a = to_b64(tex_a)
+    b64_b = to_b64(tex_b)
+    b64_d = to_b64(tex_delta)
 
-    # Load buildings
-    gpkg_path = scene_info.get("source_gpkg", "")
+    # Load buildings (crucial: explode MultiPolygons so footprints are parsed)
+    gpkg_path = scene_info.get("source_gpkg", "testarea1.gpkg")
     building_data = []
     if gpkg_path and os.path.isfile(gpkg_path):
         try:
             cx_utm = scene_info["center_utm_x"]
             cy_utm = scene_info["center_utm_y"]
-            r = 500.0
+            r = 450.0
             bbox_utm = box(cx_utm - r, cy_utm - r, cx_utm + r, cy_utm + r)
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
+                gdf_local = gdf_local.explode(index_parts=False)
                 gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
+                gdf_local["geometry"] = gdf_local["geometry"].simplify(0.5)
                 height_col = scene_info.get("height_column", "Height")
                 for row in gdf_local.itertuples():
                     geom = row.geometry
@@ -302,11 +305,12 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
                         continue
                     h = float(getattr(row, height_col, 15.0))
                     if geom.geom_type == "Polygon":
-                        coords = [[float(p[0]), float(p[1])] for p in geom.exterior.coords[:-1]]
+                        coords = [[round(p[0], 2), round(p[1], 2)] for p in geom.exterior.coords[:-1]]
                         if len(coords) >= 3:
-                            building_data.append({"coords": coords, "h": h})
-        except Exception:
-            pass
+                            building_data.append({"c": coords, "h": round(h, 1)})
+        except Exception as e:
+            print(f"Note: building loading error: {e}")
+    print(f"Embedded {len(building_data):,} 3D buildings into interactive What-If viewer.")
 
     mean_gain = float(np.mean(delta))
     pct_improved = (delta > 1.0).sum() / delta.size * 100.0
@@ -385,11 +389,11 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
         dir.position.set(200, 400, 300);
         scene.add(dir);
 
-        // Ground Plane & Textures
+        // Ground Plane & Embedded Textures (Base64 eliminates CORS)
         const texLoader = new THREE.TextureLoader();
-        const texA = texLoader.load('whatif_tex_a.png');
-        const texB = texLoader.load('whatif_tex_b.png');
-        const texDelta = texLoader.load('whatif_tex_delta.png');
+        const texA = texLoader.load('{b64_a}');
+        const texB = texLoader.load('{b64_b}');
+        const texDelta = texLoader.load('{b64_d}');
 
         const groundGeo = new THREE.PlaneGeometry({sim_size}, {sim_size});
         const groundMat = new THREE.MeshLambertMaterial({{ map: texB, side: THREE.DoubleSide }});
@@ -397,16 +401,24 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
         ground.rotation.x = -Math.PI / 2;
         scene.add(ground);
 
-        // Buildings
+        // 3D Buildings with Architectural Shading and Sharp Edge Highlights
         const buildingData = {json.dumps(building_data)};
-        const bldgMat = new THREE.MeshStandardMaterial({{ color: 0x94a3b8, roughness: 0.65, flatShading: true }});
+        const bldgMat = new THREE.MeshStandardMaterial({{ color: 0x475569, roughness: 0.5, metalness: 0.2, flatShading: true }});
+        const edgeMat = new THREE.LineBasicMaterial({{ color: 0x94a3b8, transparent: true, opacity: 0.7 }});
+
         buildingData.forEach(b => {{
             const shape = new THREE.Shape();
-            b.coords.forEach((p, idx) => {{ if (idx === 0) shape.moveTo(p[0], -p[1]); else shape.lineTo(p[0], -p[1]); }});
+            const pts = b.c || b.coords;
+            pts.forEach((p, idx) => {{ if (idx === 0) shape.moveTo(p[0], -p[1]); else shape.lineTo(p[0], -p[1]); }});
             const geom = new THREE.ExtrudeGeometry(shape, {{ depth: b.h, bevelEnabled: false }});
             const mesh = new THREE.Mesh(geom, bldgMat);
             mesh.rotation.x = -Math.PI / 2;
             scene.add(mesh);
+
+            const edgesGeom = new THREE.EdgesGeometry(geom, 25);
+            const edges = new THREE.LineSegments(edgesGeom, edgeMat);
+            edges.rotation.x = -Math.PI / 2;
+            scene.add(edges);
         }});
 
         // Dynamic Mast
@@ -525,13 +537,13 @@ def main():
         with open(args.scene_info, "r", encoding="utf-8") as f:
             scene_info = json.load(f)
 
-    scene = load_cairo_scene(args.scene, frequency_hz=args.frequency)
     sector_yaws = (0.0, 120.0, 240.0)
 
     # 1. Run Baseline (Config A)
+    scene_a = load_cairo_scene(args.scene, frequency_hz=args.frequency)
     params_a = {"height": args.height_a, "tilt": args.tilt_a, "power": args.power_a}
     rsrp_a, _ = configure_and_simulate(
-        scene=scene,
+        scene=scene_a,
         tower_pos=(0.0, 0.0, args.height_a),
         sector_yaws=sector_yaws,
         downtilt_deg=args.tilt_a,
@@ -543,10 +555,11 @@ def main():
         tag="ConfigA_Baseline"
     )
 
-    # 2. Run What-If (Config B)
+    # 2. Run What-If (Config B) - Use a fresh scene instance to prevent Dr.Jit pointer reuse errors
+    scene_b = load_cairo_scene(args.scene, frequency_hz=args.frequency)
     params_b = {"height": args.height_b, "tilt": args.tilt_b, "power": args.power_b}
     rsrp_b, _ = configure_and_simulate(
-        scene=scene,
+        scene=scene_b,
         tower_pos=(0.0, 0.0, args.height_b),
         sector_yaws=sector_yaws,
         downtilt_deg=args.tilt_b,

@@ -357,25 +357,30 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
     rsrp = tx_power_dbm + pg_db
     vmin, vmax = -125.0, -50.0
     norm_rsrp = np.clip((rsrp - vmin) / (vmax - vmin), 0.0, 1.0)
-    
-    # Save texture image
     cmap = plt.get_cmap("turbo")
     rgba = cmap(norm_rsrp)
-    tex_path = os.path.join(os.path.dirname(output_path), "heatmap_texture.png")
-    plt.imsave(tex_path, rgba, origin="lower")
+    
+    # Save texture as base64 data URI to eliminate CORS issues on file://
+    import base64
+    import io
+    buf = io.BytesIO()
+    plt.imsave(buf, rgba, format="png", origin="lower")
+    b64_texture = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
-    # Load nearby buildings (within 600m) to embed as 3D geometry in Three.js
-    gpkg_path = scene_info.get("source_gpkg", "")
+    # Load nearby buildings (within 450m) to embed as 3D geometry in Three.js
+    gpkg_path = scene_info.get("source_gpkg", "testarea1.gpkg")
     building_data = []
     if gpkg_path and os.path.isfile(gpkg_path):
         try:
             cx_utm = scene_info["center_utm_x"]
             cy_utm = scene_info["center_utm_y"]
-            r = 500.0
+            r = 450.0
             bbox_utm = box(cx_utm - r, cy_utm - r, cx_utm + r, cy_utm + r)
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
+                gdf_local = gdf_local.explode(index_parts=False)
                 gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
+                gdf_local["geometry"] = gdf_local["geometry"].simplify(0.5)
                 height_col = scene_info.get("height_column", "Height")
                 for row in gdf_local.itertuples():
                     geom = row.geometry
@@ -383,16 +388,12 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
                         continue
                     h = float(getattr(row, height_col, 15.0))
                     if geom.geom_type == "Polygon":
-                        coords = [[float(p[0]), float(p[1])] for p in geom.exterior.coords[:-1]]
+                        coords = [[round(p[0], 2), round(p[1], 2)] for p in geom.exterior.coords[:-1]]
                         if len(coords) >= 3:
-                            building_data.append({"coords": coords, "h": h})
-                    elif geom.geom_type == "MultiPolygon":
-                        for poly in geom.geoms:
-                            coords = [[float(p[0]), float(p[1])] for p in poly.exterior.coords[:-1]]
-                            if len(coords) >= 3:
-                                building_data.append({"coords": coords, "h": h})
+                            building_data.append({"c": coords, "h": round(h, 1)})
         except Exception as e:
             print(f"Note: HTML building embedding skipped: {e}")
+    print(f"Embedded {len(building_data):,} 3D buildings into interactive 3D WebGL viewer.")
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -463,9 +464,9 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
         dirLight.position.set(200, 400, 300);
         scene.add(dirLight);
 
-        // Ground with Heatmap Texture
+        // Ground with Heatmap Texture (Base64 data URI eliminates CORS)
         const texLoader = new THREE.TextureLoader();
-        texLoader.load('heatmap_texture.png', function(texture) {{
+        texLoader.load('{b64_texture}', function(texture) {{
             texture.magFilter = THREE.LinearFilter;
             texture.minFilter = THREE.LinearFilter;
             const groundGeo = new THREE.PlaneGeometry({size[0]}, {size[1]});
@@ -482,15 +483,17 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
         // 3D Buildings
         const buildingData = {json.dumps(building_data)};
         const bldgMat = new THREE.MeshStandardMaterial({{
-            color: 0x94a3b8,
-            roughness: 0.65,
-            metalness: 0.15,
+            color: 0x475569,
+            roughness: 0.5,
+            metalness: 0.2,
             flatShading: true
         }});
+        const edgeMat = new THREE.LineBasicMaterial({{ color: 0x94a3b8, transparent: true, opacity: 0.7 }});
 
         buildingData.forEach(b => {{
             const shape = new THREE.Shape();
-            b.coords.forEach((p, idx) => {{
+            const pts = b.c || b.coords;
+            pts.forEach((p, idx) => {{
                 if (idx === 0) shape.moveTo(p[0], -p[1]);
                 else shape.lineTo(p[0], -p[1]);
             }});
@@ -503,6 +506,11 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
             mesh.rotation.x = -Math.PI / 2;
             mesh.position.y = 0;
             scene.add(mesh);
+
+            const edgesGeom = new THREE.EdgesGeometry(geom, 25);
+            const edges = new THREE.LineSegments(edgesGeom, edgeMat);
+            edges.rotation.x = -Math.PI / 2;
+            scene.add(edges);
         }});
 
         // Tower Mast
@@ -635,18 +643,7 @@ def main():
         tx_power_dbm=args.tx_power
     )
 
-    # 5. Render High-Quality 3D Snapshot
-    scene_3d_path = os.path.join(args.output_dir, "scene_3d.png")
-    render_3d_snapshot(
-        scene=scene,
-        rm=rm,
-        output_path=scene_3d_path,
-        cam_pos=(220.0, -300.0, 150.0),
-        look_at=(0.0, 0.0, 24.0),
-        resolution=(1280, 720)
-    )
-
-    # 6. Generate Standalone Interactive 3D HTML Viewer
+    # 5. Generate Standalone Interactive 3D HTML Viewer FIRST
     viewer_path = os.path.join(args.output_dir, "cairo_3d_viewer.html")
     generate_interactive_3d_html(
         rm=rm,
@@ -657,6 +654,20 @@ def main():
         tx_power_dbm=args.tx_power,
         size=(args.sim_size, args.sim_size)
     )
+
+    # 6. Render High-Quality 3D Snapshot
+    scene_3d_path = os.path.join(args.output_dir, "scene_3d.png")
+    try:
+        render_3d_snapshot(
+            scene=scene,
+            rm=rm,
+            output_path=scene_3d_path,
+            cam_pos=(220.0, -300.0, 150.0),
+            look_at=(0.0, 0.0, 24.0),
+            resolution=(1280, 720)
+        )
+    except Exception as e:
+        print(f"Note: 3D snapshot render skipped: {e}")
 
     print("\n=======================================================")
     print("Enhanced 3D Visualization Pipeline Completed!")

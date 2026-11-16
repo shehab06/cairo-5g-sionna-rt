@@ -129,7 +129,7 @@ def compute_physical_paths(scene, max_depth=3):
     paths = solver(
         scene=scene,
         max_depth=max_depth,
-        samples_per_src=1_000_000,
+        samples_per_src=100_000,
         los=True,
         specular_reflection=True,
         diffraction=True
@@ -220,16 +220,19 @@ def render_mitsuba_3d_rays(scene, paths, output_path, cam_pos=(180.0, -240.0, 13
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     cam = rt.Camera(position=list(cam_pos), look_at=list(look_at))
 
-    scene.render_to_file(
-        camera=cam,
-        filename=output_path,
-        paths=paths,
-        num_samples=64,
-        resolution=(1280, 720),
-        show_devices=True,
-        show_orientations=False
-    )
-    print(f"Saved Mitsuba 3D Ray-Beam Snapshot: {output_path} ({time.time()-t0:.2f}s)")
+    try:
+        scene.render_to_file(
+            camera=cam,
+            filename=output_path,
+            paths=paths,
+            num_samples=64,
+            resolution=(1280, 720),
+            show_devices=True,
+            show_orientations=False
+        )
+        print(f"Saved Mitsuba 3D Ray-Beam Snapshot: {output_path} ({time.time()-t0:.2f}s)")
+    except Exception as e:
+        print(f"Note: Mitsuba snapshot render skipped or unsupported on this GPU: {e}")
 
 
 def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays,
@@ -244,18 +247,21 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
     """
     print(f"\nGenerating Interactive 3D WebGL Ray-Beam Viewer ({output_path})...")
     
-    # Load nearby buildings (within 550m) to embed
-    gpkg_path = scene_info.get("source_gpkg", "")
+    # Load nearby buildings (within 500m) to embed
+    gpkg_path = scene_info.get("source_gpkg", "testarea1.gpkg")
     building_data = []
     if gpkg_path and os.path.isfile(gpkg_path):
         try:
             cx_utm = scene_info["center_utm_x"]
             cy_utm = scene_info["center_utm_y"]
-            r = 500.0
+            r = 450.0
             bbox_utm = box(cx_utm - r, cy_utm - r, cx_utm + r, cy_utm + r)
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
+                # Crucial: explode MultiPolygons into Polygons
+                gdf_local = gdf_local.explode(index_parts=False)
                 gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
+                gdf_local["geometry"] = gdf_local["geometry"].simplify(0.5)
                 height_col = scene_info.get("height_column", "Height")
                 for row in gdf_local.itertuples():
                     geom = row.geometry
@@ -263,11 +269,12 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
                         continue
                     h = float(getattr(row, height_col, 15.0))
                     if geom.geom_type == "Polygon":
-                        coords = [[float(p[0]), float(p[1])] for p in geom.exterior.coords[:-1]]
+                        coords = [[round(p[0], 2), round(p[1], 2)] for p in geom.exterior.coords[:-1]]
                         if len(coords) >= 3:
-                            building_data.append({"coords": coords, "h": h})
-        except Exception:
-            pass
+                            building_data.append({"c": coords, "h": round(h, 1)})
+        except Exception as e:
+            print(f"Note: building embedding error: {e}")
+    print(f"Embedded {len(building_data):,} 3D buildings into interactive WebGL viewer.")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -363,7 +370,8 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
 
         buildingData.forEach(b => {{
             const shape = new THREE.Shape();
-            b.coords.forEach((p, idx) => {{ if (idx === 0) shape.moveTo(p[0], -p[1]); else shape.lineTo(p[0], -p[1]); }});
+            const pts = b.c || b.coords;
+            pts.forEach((p, idx) => {{ if (idx === 0) shape.moveTo(p[0], -p[1]); else shape.lineTo(p[0], -p[1]); }});
             const geom = new THREE.ExtrudeGeometry(shape, {{ depth: b.h, bevelEnabled: false }});
             const mesh = new THREE.Mesh(geom, bldgMat);
             mesh.rotation.x = -Math.PI / 2;
@@ -527,17 +535,7 @@ def main():
     # 4. Extract 3D polyline segments
     selected_rays = extract_ray_segments(paths, max_paths_to_export=250)
 
-    # 5. Render Mitsuba 3D snapshot with physical rays
-    png_path = os.path.join(args.output_dir, "scene_3d_rays.png")
-    render_mitsuba_3d_rays(
-        scene=scene,
-        paths=paths,
-        output_path=png_path,
-        cam_pos=(180.0, -230.0, 120.0),
-        look_at=(0.0, 0.0, 20.0)
-    )
-
-    # 6. Generate Standalone Interactive 3D WebGL Ray Viewer
+    # 5. Generate Standalone Interactive 3D WebGL Ray Viewer FIRST
     html_path = os.path.join(args.output_dir, "cairo_3d_rays_viewer.html")
     generate_interactive_ray_viewer_html(
         scene_info=scene_info,
@@ -545,6 +543,16 @@ def main():
         selected_rays=selected_rays,
         output_path=html_path,
         tower_pos=tower_pos
+    )
+
+    # 6. Render Mitsuba 3D snapshot with physical rays (optional / fallback safe)
+    png_path = os.path.join(args.output_dir, "scene_3d_rays.png")
+    render_mitsuba_3d_rays(
+        scene=scene,
+        paths=paths,
+        output_path=png_path,
+        cam_pos=(180.0, -230.0, 120.0),
+        look_at=(0.0, 0.0, 20.0)
     )
 
     print("\n=======================================================")
