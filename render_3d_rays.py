@@ -94,22 +94,33 @@ def setup_transmitters_and_receivers(scene, tower_pos=(0.0, 0.0, 28.0), tx_power
         )
         scene.add(tx)
 
-    # Strategic receiver locations across Cairo streets
-    rx_scenarios = [
-        {"name": "UE1 (Open Boulevard - LoS)", "pos": [80.0, 50.0, 1.5], "color": (0.2, 0.9, 0.3)},
-        {"name": "UE2 (Side Alley - 1st Bounce)", "pos": [140.0, -90.0, 1.5], "color": (1.0, 0.8, 0.2)},
-        {"name": "UE3 (Behind Tower - Reflected)", "pos": [-90.0, 120.0, 1.5], "color": (0.3, 0.8, 1.0)},
-        {"name": "UE4 (Deep Shadow - Diffracted)", "pos": [-150.0, -110.0, 1.5], "color": (0.9, 0.3, 0.9)},
-        {"name": "UE5 (Street Corridor - 2nd Bounce)", "pos": [190.0, 70.0, 1.5], "color": (1.0, 0.5, 0.1)},
-        {"name": "UE6 (Intersection Corner)", "pos": [50.0, -170.0, 1.5], "color": (0.2, 0.9, 0.8)},
-        {"name": "UE7 (Courtyard Receiver)", "pos": [-60.0, -150.0, 1.5], "color": (0.4, 0.6, 1.0)},
-        {"name": "UE8 (Avenue North)", "pos": [110.0, 150.0, 1.5], "color": (0.5, 1.0, 0.4)}
+    # Strategic receiver locations across Cairo streets relative to tower position
+    rx_offsets = [
+        {"name": "UE1 (Open Boulevard - LoS)", "offset": [80.0, 50.0, 1.5], "color": (0.2, 0.9, 0.3)},
+        {"name": "UE2 (Side Alley - 1st Bounce)", "offset": [140.0, -90.0, 1.5], "color": (1.0, 0.8, 0.2)},
+        {"name": "UE3 (Behind Tower - Reflected)", "offset": [-90.0, 120.0, 1.5], "color": (0.3, 0.8, 1.0)},
+        {"name": "UE4 (Deep Shadow - Diffracted)", "offset": [-150.0, -110.0, 1.5], "color": (0.9, 0.3, 0.9)},
+        {"name": "UE5 (Street Corridor - 2nd Bounce)", "offset": [190.0, 70.0, 1.5], "color": (1.0, 0.5, 0.1)},
+        {"name": "UE6 (Intersection Corner)", "offset": [50.0, -170.0, 1.5], "color": (0.2, 0.9, 0.8)},
+        {"name": "UE7 (Courtyard Receiver)", "offset": [-60.0, -150.0, 1.5], "color": (0.4, 0.6, 1.0)},
+        {"name": "UE8 (Avenue North)", "offset": [110.0, 150.0, 1.5], "color": (0.5, 1.0, 0.4)}
     ]
 
-    for j, rx_info in enumerate(rx_scenarios):
+    rx_scenarios = []
+    for j, rx_info in enumerate(rx_offsets):
+        rx_pos = [
+            tower_pos[0] + rx_info["offset"][0],
+            tower_pos[1] + rx_info["offset"][1],
+            rx_info["offset"][2]
+        ]
+        rx_scenarios.append({
+            "name": rx_info["name"],
+            "pos": rx_pos,
+            "color": rx_info["color"]
+        })
         rx = rt.Receiver(
             name=f"rx_{j+1}",
-            position=rx_info["pos"],
+            position=rx_pos,
             color=rx_info["color"],
             display_radius=3.0
         )
@@ -252,15 +263,15 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
     building_data = []
     if gpkg_path and os.path.isfile(gpkg_path):
         try:
-            cx_utm = scene_info["center_utm_x"]
-            cy_utm = scene_info["center_utm_y"]
+            cx_utm = scene_info["center_utm_x"] + tower_pos[0]
+            cy_utm = scene_info["center_utm_y"] + tower_pos[1]
             r = 450.0
             bbox_utm = box(cx_utm - r, cy_utm - r, cx_utm + r, cy_utm + r)
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
                 # Crucial: explode MultiPolygons into Polygons
                 gdf_local = gdf_local.explode(index_parts=False)
-                gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
+                gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-scene_info["center_utm_x"], yoff=-scene_info["center_utm_y"])
                 gdf_local["geometry"] = gdf_local["geometry"].simplify(0.5)
                 height_col = scene_info.get("height_column", "Height")
                 for row in gdf_local.itertuples():
@@ -329,7 +340,7 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
         scene.fog = new THREE.FogExp2(0x080c14, 0.0012);
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 3000);
-        camera.position.set(200, 160, 220);
+        camera.position.set({tower_pos[0]} + 200, 160, {tower_pos[1]} + 220);
 
         const renderer = new THREE.WebGLRenderer({{ antialias: true }});
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -337,12 +348,12 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
         document.body.appendChild(renderer.domElement);
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.target.set(0, 20, 0);
+        controls.target.set({tower_pos[0]}, 20, {tower_pos[1]});
         controls.enableDamping = true;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
-        dirLight.position.set(150, 300, 200);
+        dirLight.position.set({tower_pos[0]} + 150, 300, {tower_pos[1]} + 200);
         scene.add(dirLight);
 
         // Ground Plane
@@ -350,11 +361,12 @@ def generate_interactive_ray_viewer_html(scene_info, rx_scenarios, selected_rays
         const groundMat = new THREE.MeshStandardMaterial({{ color: 0x0f172a, roughness: 0.9 }});
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
+        ground.position.set({tower_pos[0]}, 0, {tower_pos[1]});
         scene.add(ground);
 
         // Street Grid
         const grid = new THREE.GridHelper(1600, 80, 0x1e293b, 0x1e293b);
-        grid.position.y = 0.2;
+        grid.position.set({tower_pos[0]}, 0.2, {tower_pos[1]});
         scene.add(grid);
 
         // Stylized Semi-Transparent 3D Buildings with Sharp Edges
@@ -507,11 +519,21 @@ def main():
     parser.add_argument("--scene", default="cairo_scene/scene.xml")
     parser.add_argument("--scene_info", default="cairo_scene/scene_info.json")
     parser.add_argument("--frequency", type=float, default=1.8e9)
+    parser.add_argument("--lat", type=float, default=None, help="Tower GPS latitude WGS84")
+    parser.add_argument("--lon", type=float, default=None, help="Tower GPS longitude WGS84")
+    parser.add_argument("--tower_x", type=float, default=0.0, help="Tower local X coordinate (m)")
+    parser.add_argument("--tower_y", type=float, default=0.0, help="Tower local Y coordinate (m)")
     parser.add_argument("--tower_z", type=float, default=28.0)
     parser.add_argument("--tx_power", type=float, default=44.0)
     parser.add_argument("--max_depth", type=int, default=3)
     parser.add_argument("--output_dir", default="outputs")
     args = parser.parse_args()
+
+    # Automatically map GPS latitude/longitude to local metric coordinates if provided
+    if args.lat is not None and args.lon is not None:
+        from scene_utils import latlon_to_scene_xy
+        args.tower_x, args.tower_y = latlon_to_scene_xy(args.lat, args.lon)
+        print(f"Mapped GPS ({args.lat:.6f}, {args.lon:.6f}) -> Tower Local Position: X={args.tower_x:.2f}m, Y={args.tower_y:.2f}m")
 
     scene_info = {}
     if os.path.isfile(args.scene_info):
@@ -522,7 +544,7 @@ def main():
     scene = load_cairo_scene(args.scene, frequency_hz=args.frequency)
 
     # 2. Setup transmitters & receivers
-    tower_pos = (0.0, 0.0, args.tower_z)
+    tower_pos = (args.tower_x, args.tower_y, args.tower_z)
     rx_scenarios = setup_transmitters_and_receivers(
         scene=scene,
         tower_pos=tower_pos,

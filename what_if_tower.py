@@ -105,7 +105,7 @@ def configure_and_simulate(scene, tower_pos, sector_yaws, downtilt_deg, tx_power
     solver = rt.RadioMapSolver()
     rm = solver(
         scene=scene,
-        center=[0.0, 0.0, 1.5],
+        center=[tower_pos[0], tower_pos[1], 1.5],
         orientation=[0.0, 0.0, 0.0],
         size=[sim_size, sim_size],
         cell_size=[cell_size, cell_size],
@@ -150,14 +150,15 @@ def calculate_kpis(rsrp, threshold_good=-95.0, threshold_usable=-105.0, threshol
 
 
 def plot_what_if_comparison(rsrp_a, rsrp_b, delta, kpis_a, kpis_b, scene_info,
-                            params_a, params_b, output_path, sim_size=2000.0):
+                            params_a, params_b, output_path, sim_size=2000.0,
+                            tower_pos=(0.0, 0.0)):
     """
     Plot 3-panel figure: Baseline RSRP, What-If RSRP, and Delta Gain/Loss Map.
     """
     print(f"\nGenerating 3-Panel What-If Comparison Visualizations...")
     t0 = time.time()
     half = sim_size / 2.0
-    extent = [-half, half, -half, half]
+    extent = [tower_pos[0] - half, tower_pos[0] + half, tower_pos[1] - half, tower_pos[1] + half]
 
     fig, axes = plt.subplots(1, 3, figsize=(22, 7.5), dpi=300)
 
@@ -168,7 +169,7 @@ def plot_what_if_comparison(rsrp_a, rsrp_b, delta, kpis_a, kpis_b, scene_info,
         try:
             cx_utm = scene_info["center_utm_x"]
             cy_utm = scene_info["center_utm_y"]
-            bbox_utm = box(cx_utm - half, cy_utm - half, cx_utm + half, cy_utm + half)
+            bbox_utm = box(cx_utm + extent[0], cy_utm + extent[2], cx_utm + extent[1], cy_utm + extent[3])
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
                 gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
@@ -181,7 +182,7 @@ def plot_what_if_comparison(rsrp_a, rsrp_b, delta, kpis_a, kpis_b, scene_info,
     if gdf_local is not None:
         gdf_local.boundary.plot(ax=ax1, color="#111111", linewidth=0.25, alpha=0.6)
         gdf_local.plot(ax=ax1, facecolor="#222222", alpha=0.3)
-    ax1.scatter([0], [0], color="red", edgecolor="white", s=90, marker="^", zorder=10)
+    ax1.scatter([tower_pos[0]], [tower_pos[1]], color="red", edgecolor="white", s=90, marker="^", zorder=10)
     ax1.set_title(
         f"Baseline (Config A)\nHeight: {params_a['height']:.0f}m | Tilt: {params_a['tilt']:.0f}° | Power: {params_a['power']:.0f} dBm\n"
         f"Good (>-95 dBm): {kpis_a['pct_good']:.1f}% | Dead (<-115 dBm): {kpis_a['pct_dead']:.1f}%",
@@ -199,7 +200,7 @@ def plot_what_if_comparison(rsrp_a, rsrp_b, delta, kpis_a, kpis_b, scene_info,
     if gdf_local is not None:
         gdf_local.boundary.plot(ax=ax2, color="#111111", linewidth=0.25, alpha=0.6)
         gdf_local.plot(ax=ax2, facecolor="#222222", alpha=0.3)
-    ax2.scatter([0], [0], color="lime", edgecolor="black", s=90, marker="^", zorder=10)
+    ax2.scatter([tower_pos[0]], [tower_pos[1]], color="lime", edgecolor="black", s=90, marker="^", zorder=10)
     ax2.set_title(
         f"What-If (Config B - Optimized)\nHeight: {params_b['height']:.0f}m | Tilt: {params_b['tilt']:.0f}° | Power: {params_b['power']:.0f} dBm\n"
         f"Good (>-95 dBm): {kpis_b['pct_good']:.1f}% | Dead (<-115 dBm): {kpis_b['pct_dead']:.1f}%",
@@ -220,7 +221,7 @@ def plot_what_if_comparison(rsrp_a, rsrp_b, delta, kpis_a, kpis_b, scene_info,
     if gdf_local is not None:
         gdf_local.boundary.plot(ax=ax3, color="#111111", linewidth=0.25, alpha=0.6)
         gdf_local.plot(ax=ax3, facecolor="#222222", alpha=0.3)
-    ax3.scatter([0], [0], color="blue", edgecolor="white", s=90, marker="o", zorder=10)
+    ax3.scatter([tower_pos[0]], [tower_pos[1]], color="blue", edgecolor="white", s=90, marker="o", zorder=10)
     
     mean_gain = float(np.mean(delta))
     pct_improved = (delta > 1.0).sum() / delta.size * 100.0
@@ -252,7 +253,7 @@ def plot_what_if_comparison(rsrp_a, rsrp_b, delta, kpis_a, kpis_b, scene_info,
 def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
                                             params_a, params_b, kpis_a, kpis_b,
                                             output_path="outputs/what_if_3d_viewer.html",
-                                            sim_size=2000.0):
+                                            sim_size=2000.0, tower_pos=(0.0, 0.0)):
     """
     Generate an interactive 3D WebGL viewer allowing instant toggling between:
     - [Baseline Config A]
@@ -289,14 +290,14 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
     building_data = []
     if gpkg_path and os.path.isfile(gpkg_path):
         try:
-            cx_utm = scene_info["center_utm_x"]
-            cy_utm = scene_info["center_utm_y"]
+            cx_utm = scene_info["center_utm_x"] + tower_pos[0]
+            cy_utm = scene_info["center_utm_y"] + tower_pos[1]
             r = 450.0
             bbox_utm = box(cx_utm - r, cy_utm - r, cx_utm + r, cy_utm + r)
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
                 gdf_local = gdf_local.explode(index_parts=False)
-                gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
+                gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-scene_info["center_utm_x"], yoff=-scene_info["center_utm_y"])
                 gdf_local["geometry"] = gdf_local["geometry"].simplify(0.5)
                 height_col = scene_info.get("height_column", "Height")
                 for row in gdf_local.itertuples():
@@ -373,7 +374,7 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
         scene.fog = new THREE.FogExp2(0x0a0e17, 0.001);
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 4000);
-        camera.position.set(240, 180, 260);
+        camera.position.set({tower_pos[0]} + 240, 180, {tower_pos[1]} + 260);
 
         const renderer = new THREE.WebGLRenderer({{ antialias: true }});
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -381,12 +382,12 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
         document.body.appendChild(renderer.domElement);
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.target.set(0, 30, 0);
+        controls.target.set({tower_pos[0]}, 30, {tower_pos[1]});
         controls.enableDamping = true;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.7));
         const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-        dir.position.set(200, 400, 300);
+        dir.position.set({tower_pos[0]} + 200, 400, {tower_pos[1]} + 300);
         scene.add(dir);
 
         // Ground Plane & Embedded Textures (Base64 eliminates CORS)
@@ -399,6 +400,7 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
         const groundMat = new THREE.MeshLambertMaterial({{ map: texB, side: THREE.DoubleSide }});
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
+        ground.position.set({tower_pos[0]}, 0, {tower_pos[1]});
         scene.add(ground);
 
         // 3D Buildings with Architectural Shading and Sharp Edge Highlights
@@ -426,20 +428,20 @@ def generate_interactive_3d_comparison_html(rsrp_a, rsrp_b, delta, scene_info,
         const mastGeo = new THREE.CylinderGeometry(0.8, 1.2, mastHeight, 16);
         const mastMat = new THREE.MeshStandardMaterial({{ color: 0x64748b, metalness: 0.8 }});
         const mast = new THREE.Mesh(mastGeo, mastMat);
-        mast.position.set(0, mastHeight / 2, 0);
+        mast.position.set({tower_pos[0]}, mastHeight / 2, {tower_pos[1]});
         scene.add(mast);
 
         // Tower Sphere Beacon
         const sphereGeo = new THREE.SphereGeometry(3.5, 32, 32);
         const sphereMat = new THREE.MeshStandardMaterial({{ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.8 }});
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.set(0, mastHeight, 0);
+        sphere.position.set({tower_pos[0]}, mastHeight, {tower_pos[1]});
         scene.add(sphere);
 
         function updateMast(h) {{
             mast.scale.y = h / {params_b['height']};
-            mast.position.y = h / 2;
-            sphere.position.y = h;
+            mast.position.set({tower_pos[0]}, h / 2, {tower_pos[1]});
+            sphere.position.set({tower_pos[0]}, h, {tower_pos[1]});
         }}
 
         function setMode(mode) {{
@@ -516,6 +518,10 @@ def main():
     parser.add_argument("--scene", default="cairo_scene/scene.xml")
     parser.add_argument("--scene_info", default="cairo_scene/scene_info.json")
     parser.add_argument("--frequency", type=float, default=1.8e9)
+    parser.add_argument("--lat", type=float, default=None, help="Tower GPS latitude WGS84")
+    parser.add_argument("--lon", type=float, default=None, help="Tower GPS longitude WGS84")
+    parser.add_argument("--tower_x", type=float, default=0.0, help="Tower local X coordinate (m)")
+    parser.add_argument("--tower_y", type=float, default=0.0, help="Tower local Y coordinate (m)")
     # Config A (Baseline)
     parser.add_argument("--height_a", type=float, default=28.0, help="Baseline tower mast height Z (m)")
     parser.add_argument("--tilt_a", type=float, default=0.0, help="Baseline mechanical downtilt (deg)")
@@ -532,6 +538,12 @@ def main():
     parser.add_argument("--output_dir", default="outputs")
     args = parser.parse_args()
 
+    # Automatically map GPS latitude/longitude to local metric coordinates if provided
+    if args.lat is not None and args.lon is not None:
+        from scene_utils import latlon_to_scene_xy
+        args.tower_x, args.tower_y = latlon_to_scene_xy(args.lat, args.lon)
+        print(f"Mapped GPS ({args.lat:.6f}, {args.lon:.6f}) -> Tower Local Position: X={args.tower_x:.2f}m, Y={args.tower_y:.2f}m")
+
     scene_info = {}
     if os.path.isfile(args.scene_info):
         with open(args.scene_info, "r", encoding="utf-8") as f:
@@ -544,7 +556,7 @@ def main():
     params_a = {"height": args.height_a, "tilt": args.tilt_a, "power": args.power_a}
     rsrp_a, _ = configure_and_simulate(
         scene=scene_a,
-        tower_pos=(0.0, 0.0, args.height_a),
+        tower_pos=(args.tower_x, args.tower_y, args.height_a),
         sector_yaws=sector_yaws,
         downtilt_deg=args.tilt_a,
         tx_power_dbm=args.power_a,
@@ -575,7 +587,7 @@ def main():
     params_b = {"height": args.height_b, "tilt": args.tilt_b, "power": args.power_b}
     rsrp_b, _ = configure_and_simulate(
         scene=scene_b,
-        tower_pos=(0.0, 0.0, args.height_b),
+        tower_pos=(args.tower_x, args.tower_y, args.height_b),
         sector_yaws=sector_yaws,
         downtilt_deg=args.tilt_b,
         tx_power_dbm=args.power_b,
@@ -627,7 +639,8 @@ def main():
         params_a=params_a,
         params_b=params_b,
         output_path=comp_png_path,
-        sim_size=args.sim_size
+        sim_size=args.sim_size,
+        tower_pos=(args.tower_x, args.tower_y)
     )
 
     # 6. Generate Interactive 3D WebGL Comparison Viewer
@@ -642,7 +655,8 @@ def main():
         kpis_a=kpis_a,
         kpis_b=kpis_b,
         output_path=viewer_path,
-        sim_size=args.sim_size
+        sim_size=args.sim_size,
+        tower_pos=(args.tower_x, args.tower_y)
     )
 
     print("\n=======================================================")

@@ -372,14 +372,14 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
     building_data = []
     if gpkg_path and os.path.isfile(gpkg_path):
         try:
-            cx_utm = scene_info["center_utm_x"]
-            cy_utm = scene_info["center_utm_y"]
+            cx_utm = scene_info["center_utm_x"] + tower_pos[0]
+            cy_utm = scene_info["center_utm_y"] + tower_pos[1]
             r = 450.0
             bbox_utm = box(cx_utm - r, cy_utm - r, cx_utm + r, cy_utm + r)
             gdf_local = gpd.read_file(gpkg_path, bbox=bbox_utm)
             if not gdf_local.empty:
                 gdf_local = gdf_local.explode(index_parts=False)
-                gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-cx_utm, yoff=-cy_utm)
+                gdf_local["geometry"] = gdf_local["geometry"].translate(xoff=-scene_info["center_utm_x"], yoff=-scene_info["center_utm_y"])
                 gdf_local["geometry"] = gdf_local["geometry"].simplify(0.5)
                 height_col = scene_info.get("height_column", "Height")
                 for row in gdf_local.itertuples():
@@ -420,7 +420,7 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
 <body>
     <div id="info">
         <h2>Cairo 1.8 GHz 3D Coverage Viewer</h2>
-        <p><strong>Site:</strong> 3-Sector Macro Tower (Z = {tower_pos[2]:.0f}m)</p>
+        <p><strong>Site:</strong> 3-Sector Macro Tower (X = {tower_pos[0]:.0f}m, Y = {tower_pos[1]:.0f}m, Z = {tower_pos[2]:.0f}m)</p>
         <p><strong>Carrier:</strong> 1.8 GHz (Band 3 / n3) | Power: 44 dBm/sec</p>
         <div style="margin-top: 8px;">
             <span class="badge sec1">Sec 1: 0°</span>
@@ -444,7 +444,7 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
         scene.fog = new THREE.FogExp2(0x0a0e17, 0.001);
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 4000);
-        camera.position.set(220, 160, 280);
+        camera.position.set({tower_pos[0]} + 220, {tower_pos[2]} + 160, {tower_pos[1]} + 280);
 
         const renderer = new THREE.WebGLRenderer({{ antialias: true }});
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -461,7 +461,7 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
         const ambLight = new THREE.AmbientLight(0xffffff, 0.65);
         scene.add(ambLight);
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
-        dirLight.position.set(200, 400, 300);
+        dirLight.position.set({tower_pos[0]} + 200, 400, {tower_pos[1]} + 300);
         scene.add(dirLight);
 
         // Ground with Heatmap Texture (Base64 data URI eliminates CORS)
@@ -476,8 +476,9 @@ def generate_interactive_3d_html(rm, scene_info, output_path="outputs/cairo_3d_v
             }});
             const ground = new THREE.Mesh(groundGeo, groundMat);
             ground.rotation.x = -Math.PI / 2;
-            ground.position.set(0, 0, 0);
+            ground.position.set({tower_pos[0]}, 0, {tower_pos[1]});
             scene.add(ground);
+        }});
         }});
 
         // 3D Buildings
@@ -587,6 +588,8 @@ def main():
     parser.add_argument("--scene", default="cairo_scene/scene.xml", help="Path to scene.xml")
     parser.add_argument("--scene_info", default="cairo_scene/scene_info.json", help="Path to scene_info.json")
     parser.add_argument("--frequency", type=float, default=1.8e9, help="Carrier frequency in Hz (default: 1.8e9)")
+    parser.add_argument("--lat", type=float, default=None, help="Tower GPS latitude WGS84")
+    parser.add_argument("--lon", type=float, default=None, help="Tower GPS longitude WGS84")
     parser.add_argument("--tower_x", type=float, default=0.0, help="Tower local X coordinate (m)")
     parser.add_argument("--tower_y", type=float, default=0.0, help="Tower local Y coordinate (m)")
     parser.add_argument("--tower_z", type=float, default=28.0, help="Tower rooftop height Z (m)")
@@ -599,6 +602,12 @@ def main():
     parser.add_argument("--diffraction", action="store_true", default=True, help="Enable edge/wedge diffraction")
     parser.add_argument("--output_dir", default="outputs", help="Output directory for visualizations")
     args = parser.parse_args()
+
+    # Automatically map GPS latitude/longitude to local metric coordinates if provided
+    if args.lat is not None and args.lon is not None:
+        from scene_utils import latlon_to_scene_xy
+        args.tower_x, args.tower_y = latlon_to_scene_xy(args.lat, args.lon)
+        print(f"Mapped GPS ({args.lat:.6f}, {args.lon:.6f}) -> Tower Local Position: X={args.tower_x:.2f}m, Y={args.tower_y:.2f}m")
 
     scene_info = {}
     if os.path.isfile(args.scene_info):
@@ -619,10 +628,10 @@ def main():
         display_radius=args.tx_display_radius
     )
 
-    # 3. Compute 2D radio coverage map
+    # 3. Compute 2D radio coverage map centered around tower
     rm = compute_coverage(
         scene=scene,
-        center=(0.0, 0.0, 1.5),
+        center=(args.tower_x, args.tower_y, 1.5),
         size=(args.sim_size, args.sim_size),
         cell_size=(args.cell_size, args.cell_size),
         max_depth=args.max_depth,
@@ -639,7 +648,7 @@ def main():
         tower_pos=tower_pos,
         sector_yaws=sector_yaws,
         size=(args.sim_size, args.sim_size),
-        center=(0.0, 0.0, 1.5),
+        center=(args.tower_x, args.tower_y, 1.5),
         tx_power_dbm=args.tx_power
     )
 
@@ -662,8 +671,8 @@ def main():
             scene=scene,
             rm=rm,
             output_path=scene_3d_path,
-            cam_pos=(220.0, -300.0, 150.0),
-            look_at=(0.0, 0.0, 24.0),
+            cam_pos=(args.tower_x + 220.0, args.tower_y - 300.0, args.tower_z + 130.0),
+            look_at=(args.tower_x, args.tower_y, args.tower_z - 4.0),
             resolution=(1280, 720)
         )
     except Exception as e:
