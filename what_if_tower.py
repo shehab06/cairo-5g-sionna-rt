@@ -555,6 +555,21 @@ def main():
         tag="ConfigA_Baseline"
     )
 
+    # Cleanly synchronize CUDA stream and release memory to prevent Dr.Jit async task conflicts
+    import gc
+    try:
+        import drjit as dr
+        dr.sync_thread()
+    except Exception:
+        pass
+    del scene_a
+    gc.collect()
+    try:
+        import drjit as dr
+        dr.sync_thread()
+    except Exception:
+        pass
+
     # 2. Run What-If (Config B) - Use a fresh scene instance to prevent Dr.Jit pointer reuse errors
     scene_b = load_cairo_scene(args.scene, frequency_hz=args.frequency)
     params_b = {"height": args.height_b, "tilt": args.tilt_b, "power": args.power_b}
@@ -570,6 +585,14 @@ def main():
         max_depth=args.max_depth,
         tag="ConfigB_Optimized"
     )
+
+    try:
+        import drjit as dr
+        dr.sync_thread()
+    except Exception:
+        pass
+    del scene_b
+    gc.collect()
 
     # 3. Compute Delta Map: B - A
     delta_rsrp = rsrp_b - rsrp_a
